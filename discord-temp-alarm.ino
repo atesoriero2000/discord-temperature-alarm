@@ -45,19 +45,40 @@ Features:
 #define DISCORD_YELLOW  16760576
 #define DISCORD_RED     16711680
 
+#define TEMP_PRECISION .01 // °F
+
+int MSG_INTERVAL_ERROR  =    1 * 60; // 1 minute
+int MSG_INTERVAL_WARN   =    5 * 60; // 5 minutes
+int MSG_INTERVAL        =   15 * 60; // 15 minutes
+
+// double TEMP_TARGET      =   62; // °F
+// double TEMP_RANGE_WARN  =   5;  //+- 5 °F
+
+double TEMP_HIGH_WARN   = 82; 
+double TEMP_LOW_WARN    = 59; 
+
+double TEMP_HIGH_ERROR  = 90; 
+double TEMP_LOW_ERROR   = 55; 
+
+static unsigned long lastTempMsg = 0;
+static unsigned long lastTempWarn = 0;
+static unsigned long lastTempError = 0;
+
+
 WiFiClientSecure client;
 HTTPClient https;
 // WiFiUDP ntpUDP;
 
+static time_t now;
+const char* tz = "EST5EDT,M3.2.0/2,M11.1.0/2";
 // NTPClient timeClient(ntpUDP, "north-america.pool.ntp.org", 19*60*60, 6000);
-// static time_t now;
 
 // Create sensor object
 Adafruit_AHTX0 aht;
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial); // Wait for serial port to connect
+  // while (!Serial); // Wait for serial port to connect
   Serial.println("AHT21 Test\n\n");
 
   //################
@@ -79,18 +100,16 @@ void setup() {
   //####################
   //## NTP Time Setup ##
   //####################
-  // Serial.println("NTP Server: ");
-  // timeClient.begin();
-
-  // configTime("GMT0", "pool.ntp.org", "time.nist.gov");
-  // for (time_t now = time (nullptr); now < 8 * 3600 * 2; now = time (nullptr)) delay (500);
+  Serial.println("NTP Server: ");
+  configTime(tz, "pool.ntp.org", "time.nist.gov");
+  for (time_t now = time (nullptr); now < 8 * 3600 * 2; now = time (nullptr)) delay (500);
   yield();
   // delay(500); //NOTE
-  // Serial.println("NTP Server Synchronized: " + getFormattedTime((uint32_t)  time (nullptr), false));
+  Serial.println("NTP Server Synchronized: " + getFormattedTime((uint32_t)  time (nullptr), false));
 
   client.setInsecure();
   https.begin(client, WEBHOOK);
-  sendDiscordMsg("Alarm Connected: ", DISCORD_GREEN);
+  sendDiscordConnect("Alarm Connected:");
 
 
   // Initialize I2C (SDA = D2/GPIO4, SCL = D1/GPIO5)
@@ -101,21 +120,49 @@ void setup() {
   Serial.println("AHT21 found");
 }
 
+
+
+
+
+
 void loop() {
-  // now = time(nullptr); // + (6*60 + 10)*60;
+  now = time(nullptr); // + (6*60 + 10)*60;
   // timeClient.update(); //TODO: update less frequently
 
   sensors_event_t humidity, temp;
   aht.getEvent(&humidity, &temp); // Populate objects with fresh data
-  
-  String msg = "\nTempurature: " + String(temp.temperature) + " °C  |  " + String(temp.temperature* 1.8 + 32) + " °F \nHumidity: " + String(humidity.relative_humidity) + " %";
-  
+  double tempF = temp.temperature * 1.8 + 32;
+  String msg = "\nTemperature: " + String(temp.temperature) + " °C  |  " + String(tempF) + " °F \nHumidity: " + String(humidity.relative_humidity) + " %";
   Serial.println(msg);
-  sendDiscordTempurature("Tempurature Log", DISCORD_BLUE, temp.temperature, humidity.relative_humidity);
 
-  delay(60000); // Read every 60 seconds
+  
+
+  if(tempF > TEMP_HIGH_ERROR || tempF < TEMP_LOW_ERROR){
+    if(now > lastTempError + MSG_INTERVAL_ERROR){
+      sendDiscordTemperature("[ERROR] Temperature out of range!", DISCORD_RED, temp.temperature, humidity.relative_humidity);
+      lastTempError = now;
+    }
+
+  } else if(tempF > TEMP_HIGH_WARN || tempF < TEMP_LOW_WARN){
+    if(now > lastTempWarn + MSG_INTERVAL_WARN){
+      sendDiscordTemperature("[WARNING] Temperature Log:", DISCORD_YELLOW, temp.temperature, humidity.relative_humidity);
+      lastTempWarn = now;
+    }
+
+  } else if(now > lastTempMsg + MSG_INTERVAL) {
+    sendDiscordTemperature("Temperature Log:", DISCORD_BLUE, temp.temperature, humidity.relative_humidity);
+    lastTempMsg = now;
+  }
+
+  delay(1000); // Refresh every 1 second
 }
 
+
+
+
+
+
+//TODOOOOOOOOOOOOOOOOO
 void connectWIFI() {
 //TODO
 }
@@ -148,34 +195,81 @@ void sendDiscordMsg(String subContent, int color){
   Serial.println("Send Discord Msg POST Code: " + (String) code + "   " + https.errorToString(code));
 }
 
-void sendDiscordTempurature(String title, int color, double temp, double humidity){
-  String fullTitle = "**" + title + "**\\u0000";
+void sendDiscordTemperature(String title, int color, double temp, double humidity){
+  String fullTitle = "**" + title + "  " + getFormattedTime() + "**\\u0000";
   String tempStr = String(temp * 1.8 + 32) + " °F" + "    |    " + String(temp) + " °C";
   String humidityStr = String(humidity) + " %";
 
   https.addHeader("Content-Type", "application/json");
   int code = https.POST("{\"content\":\"\",\"embeds\": [{\"title\": \"" + fullTitle + "\", \"color\": " + (String) color + ", \"fields\": [{\"name\": \"\",\"value\": \"" + tempStr + "\\n\\u0000\"}, {\"name\": \"Humidity\",\"value\": \"" + humidityStr + "\\u0000\"} ] }],\"tts\":false}");
 
-  Serial.println("Send Discord Tempurature POST Code: " + (String) code + "   " + https.errorToString(code));
+  Serial.println("Send Discord Temperature POST Code: " + (String) code + "   " + https.errorToString(code));
 }
+
+
+void sendDiscordConnect(String title){
+  String fullTitle = "**" + title + "  " + getFormattedTime() + "**\\u0000";
+
+  // Messaging Intervals
+  String nominalMsgIntStr = "Nominal:  " + String(MSG_INTERVAL) + "s";
+  String warningMsgIntStr = "Warning:  " + String(MSG_INTERVAL_WARN) + "s";
+  String errorMsgIntStr   = "Error:\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0 " + String(MSG_INTERVAL_ERROR) + "s";
+  String msgIntervalsStr  =  nominalMsgIntStr + "\\n" + warningMsgIntStr + "\\n" + errorMsgIntStr;
+
+  // Alert Temperature Ranges
+  String nominalRangeStr  = "Nominal:  " + String((int) TEMP_LOW_WARN) + "-" + String((int) TEMP_HIGH_WARN) + "°F";
+  String warningRangeStr  = "Warning:  " + String((int) TEMP_LOW_ERROR) + "-" + String(TEMP_LOW_WARN - TEMP_PRECISION) + "°F  or  "  + String(TEMP_HIGH_WARN + TEMP_PRECISION) + "-" + String((int) TEMP_HIGH_ERROR) + "°F";
+  String errorRangeStr    = "Error:\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0 <"   + String((int) TEMP_LOW_ERROR) + "°F  or  >"  + String((int) TEMP_HIGH_ERROR) + "°F";
+  String alertRangeStr    = nominalRangeStr + "\\n" + warningRangeStr + "\\n" + errorRangeStr;
+
+  https.addHeader("Content-Type", "application/json");
+  int code = https.POST("{\"content\":\"\",\"embeds\": [{\"title\": \"" + fullTitle + "\", \"color\": " + (String) DISCORD_GREEN + ", \"fields\": [{\"name\": \"Messaging Intervals\",\"value\": \"" + msgIntervalsStr + "\\n\\u0000\"}, {\"name\": \"Alert Temperature Ranges\",\"value\": \"" + alertRangeStr + "\\u0000\"} ] }],\"tts\":false}");
+
+  Serial.println("Send Discord Temperature POST Code: " + (String) code + "   " + https.errorToString(code));
+}
+
+
   //########################
   //## NTP Time Functions ##
   //########################
 
-// String getFormattedTime(unsigned long rawTime) {
-//   return getFormattedTime(rawTime, false);
-// }
+String getFormattedTime() {
+  now = time(nullptr); // + (6*60 + 10)*60;
+  struct tm timeinfo;
+  localtime_r(&now, &timeinfo);
+  return formatDateTime(timeinfo);
+}
 
-// String getFormattedTime(unsigned long rawTime, bool isDur) {
-//   unsigned long hours = rawTime / 3600;
-//   if(!isDur) hours %= 24;
-//   String hoursStr = hours < 10 ? "0" + String(hours) : String(hours);
+String formatDateTime(const struct tm& t)
+{
+  char buffer[25];  // Enough for "YYYY-MM-DD HH:MM:SS"
+  
+  snprintf(buffer, sizeof(buffer),
+           " %02d/%02d/%02d  %02d:%02d:%02d",
+           t.tm_mon + 1,
+           t.tm_mday,
+           t.tm_year + 1900 - 2000,
+           t.tm_hour,
+           t.tm_min,
+           t.tm_sec);
 
-//   unsigned long minutes = (rawTime % 3600) / 60;
-//   String minuteStr = minutes < 10 ? "0" + String(minutes) : String(minutes);
+  return String(buffer);
+}
 
-//   unsigned long seconds = rawTime % 60;
-//   String secondStr = seconds < 10 ? "0" + String(seconds) : String(seconds);
+String getFormattedTime(unsigned long rawTime) {
+  return getFormattedTime(rawTime, false);
+}
 
-//   return isDur ? (hoursStr + "h " + minuteStr + "m " + secondStr + "s") : (hoursStr + ":" + minuteStr + ":" + secondStr);
-// }
+String getFormattedTime(unsigned long rawTime, bool isDur) {
+  unsigned long hours = rawTime / 3600;
+  if(!isDur) hours %= 24;
+  String hoursStr = hours < 10 ? "0" + String(hours) : String(hours);
+
+  unsigned long minutes = (rawTime % 3600) / 60;
+  String minuteStr = minutes < 10 ? "0" + String(minutes) : String(minutes);
+
+  unsigned long seconds = rawTime % 60;
+  String secondStr = seconds < 10 ? "0" + String(seconds) : String(seconds);
+
+  return isDur ? (hoursStr + "h " + minuteStr + "m " + secondStr + "s") : (hoursStr + ":" + minuteStr + ":" + secondStr);
+}
