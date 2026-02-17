@@ -51,7 +51,12 @@ Commands:
 #define DISCORD_YELLOW  16760576
 #define DISCORD_RED     16711680
 
-#define SENSOR_TYPE "DS18B20"   //DS18B20 or AHT21
+// #define LABEL "Homebrew (L)"
+// #define SENSOR_TYPE "DS18B20"   //DS18B20 or AHT21
+// #define TEMP_PRECISION .01      // °F
+
+#define LABEL "Homebrew (A)"
+#define SENSOR_TYPE "AHT21"   //DS18B20 or AHT21
 #define TEMP_PRECISION .01      // °F
 
 int MSG_INTERVAL_ERROR  =    1 * 60; // 1 minute
@@ -77,14 +82,18 @@ static time_t now;
 const char* tz = "EST5EDT,M3.2.0/2,M11.1.0/2";
 // NTPClient timeClient(ntpUDP, "north-america.pool.ntp.org", 19*60*60, 6000);
 
+// AHT21
 // Create sensor object
 Adafruit_AHTX0 aht;
+
+// DS18B20
 // GPIO where the DS18B20 is connected to
 const int oneWireBus = 12;     
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(oneWireBus);
 // Pass our oneWire reference to Dallas Temperature sensor 
 DallasTemperature sensors(&oneWire);
+
 
 void setup() {
   Serial.begin(115200);
@@ -93,37 +102,25 @@ void setup() {
   //################
   //## WIFI Setup ##
   //################
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(SSID, KEY);
-  Serial.print("Connecting WiFi: ");
-  for(int i=0; WiFi.status() != WL_CONNECTED; i++){
-    Serial.print("*");
-    delay(250);
-  } 
-  WiFi.setAutoReconnect(true);
-  WiFi.persistent(true);
-  Serial.println("\n\nWiFi Connected");
-
+  connectWIFI();
 
   //####################
   //## NTP Time Setup ##
   //####################
-  Serial.println("NTP Server: ");
-  configTime(tz, "pool.ntp.org", "time.nist.gov");
-  for (time_t now = time (nullptr); now < 8 * 3600 * 2; now = time (nullptr)) delay (500);
-  yield();
-  // delay(500); //NOTE
-  Serial.println("NTP Server Synchronized: " + getFormattedTime((uint32_t)  time (nullptr), false));
+  connectNTP();
 
+  //###################
+  //## Discord Setup ##
+  //###################
   client.setInsecure();
   https.begin(client, WEBHOOK);
   sendDiscordConnect("Alarm Connected:");
 
-
+  //##################
+  //## Sensor Setup ##
+  //##################
   initializeSensor();
 }
-
 
 
 
@@ -133,44 +130,36 @@ void loop() {
   // timeClient.update(); //TODO: update less frequently
 
   sensors_event_t humidity, temp;
-
-  //TODO move to helper function
-  if(SENSOR_TYPE == "AHT21"){
-    aht.getEvent(&humidity, &temp); // Populate objects with fresh data
-    
-  } else if (SENSOR_TYPE == "DS18B20"){  
-    sensors.requestTemperatures(); 
-    temp.temperature = sensors.getTempCByIndex(0);
-    // float temperatureF = sensors.getTempFByIndex(0);
-  }
+  getTemperature(&humidity, &temp);
 
   double tempF = temp.temperature * 1.8 + 32;
   String msg = "\nTemperature: " + String(temp.temperature) + " °C  |  " + String(tempF) + " °F \nHumidity: " + String(humidity.relative_humidity) + " %";
   Serial.println(msg);
 
-  
-//TODO check zeroing functionality
   if(tempF > TEMP_HIGH_ERROR || tempF < TEMP_LOW_ERROR){
     if(now > lastTempError + MSG_INTERVAL_ERROR){
-      lastTempMsg = 0;
+      // Zero other timestamps so changes are immediately logged
+      lastTempMsg = 0;    
       lastTempWarn = 0;
       lastTempError = now;
-      sendDiscordTemperature("[ERROR] Temperature out of range!", DISCORD_RED, temp.temperature, humidity.relative_humidity);
+      sendDiscordTemperature("[ERROR] " + String(LABEL) + "  Temperature out of range!", DISCORD_RED, temp.temperature, humidity.relative_humidity);
     }
 
   } else if(tempF > TEMP_HIGH_WARN || tempF < TEMP_LOW_WARN){
     if(now > lastTempWarn + MSG_INTERVAL_WARN){
+      // Zero other timestamps so changes are immediately logged
       lastTempMsg = 0;
       lastTempWarn = now;
       lastTempError = 0;
-      sendDiscordTemperature("[WARNING] Temperature Log:", DISCORD_YELLOW, temp.temperature, humidity.relative_humidity);
+      sendDiscordTemperature("[WARNING] " + String(LABEL) + ":", DISCORD_YELLOW, temp.temperature, humidity.relative_humidity);
     }
 
   } else if(now > lastTempMsg + MSG_INTERVAL) {
+    // Zero other timestamps so changes are immediately logged
     lastTempMsg = now;
     lastTempWarn = 0;
     lastTempError = 0;
-    sendDiscordTemperature("Temperature Log:", DISCORD_BLUE, temp.temperature, humidity.relative_humidity);
+    sendDiscordTemperature(String(LABEL) + ":", DISCORD_BLUE, temp.temperature, humidity.relative_humidity);
   }
 
   delay(1000); // Refresh every 1 second
@@ -192,20 +181,42 @@ void initializeSensor(){
     // Start the DS18B20 sensor
     sensors.begin();
 
-  } else {
-    String errorMsg = "ERROR: Sensor type '" + String(SENSOR_TYPE) + "' not supported";
-    Serial.println(errorMsg);
-    sendDiscordMsg(errorMsg, DISCORD_RED);
-    while(true) delay(10);
-  }
+  } else sendFatalError("Sensor type '" + String(SENSOR_TYPE) + "' not supported");
+}
+
+void getTemperature(sensors_event_t* humidity, sensors_event_t* temp){
+  if(SENSOR_TYPE == "AHT21"){
+    aht.getEvent(humidity, temp); // Populate objects with fresh data
+    
+  } else if (SENSOR_TYPE == "DS18B20"){  
+    sensors.requestTemperatures(); 
+    temp->temperature = sensors.getTempCByIndex(0);
+    // float temperatureF = sensors.getTempFByIndex(0);
+
+  } else sendFatalError("IDEK how you got here. Sensor type '" + String(SENSOR_TYPE) + "' not supported");
 }
 
 
-
-
-//TODOOOOOOOOOOOOOOOOO
 void connectWIFI() {
-//TODO
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(SSID, KEY);
+  Serial.print("Connecting WiFi: ");
+  for(int i=0; WiFi.status() != WL_CONNECTED; i++){
+    Serial.print("*");
+    delay(250);
+  } 
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
+  Serial.println("\n\nWiFi Connected");
+}
+
+void connectNTP(){
+  Serial.println("NTP Server: ");
+  configTime(tz, "pool.ntp.org", "time.nist.gov");
+  for (time_t now = time (nullptr); now < 8 * 3600 * 2; now = time (nullptr)) delay (500);
+  yield();
+  // delay(500); //NOTE
+  Serial.println("NTP Server Synchronized: " + getFormattedTime((uint32_t)  time (nullptr), false));
 }
 
 // void setupDiscord(){
@@ -224,8 +235,11 @@ void connectWIFI() {
 // Green:     65280 (Get, setting change confirmation)
 // Yellow:    16760576
 // Red:       16711680
-void sendDiscordError(int errorCode, int color){
-  sendDiscordMsg("**ERROR:  **" + (String) errorCode + "   " + https.errorToString(errorCode), color);
+void sendFatalError(String errorMsg){
+  Serial.println(errorMsg);
+  sendDiscordMsg(errorMsg, DISCORD_RED);  
+  // sendDiscordMsg("**ERROR:  **" + (String) errorCode + "   " + https.errorToString(errorCode), color);
+  while(true) delay(10);
 }
 
 void sendDiscordMsg(String subContent, int color){
@@ -239,10 +253,11 @@ void sendDiscordMsg(String subContent, int color){
 void sendDiscordTemperature(String title, int color, double temp, double humidity){
   String fullTitle = "**" + title + "  " + getFormattedTime() + "**\\u0000";
   String tempStr = String(temp * 1.8 + 32) + " °F" + "    |    " + String(temp) + " °C";
-  String humidityStr = String(humidity) + " %";
+  String humidityStr = "\\u0000\"}";
+  if(SENSOR_TYPE != "DS18B20") humidityStr = "\\n\\u0000\"}, {\"name\": \"Humidity\",\"value\": \"" + String(humidity) + " %\\u0000\"}";
 
   https.addHeader("Content-Type", "application/json");
-  int code = https.POST("{\"content\":\"\",\"embeds\": [{\"title\": \"" + fullTitle + "\", \"color\": " + (String) color + ", \"fields\": [{\"name\": \"\",\"value\": \"" + tempStr + "\\n\\u0000\"}, {\"name\": \"Humidity\",\"value\": \"" + humidityStr + "\\u0000\"} ] }],\"tts\":false}");
+  int code = https.POST("{\"content\":\"\",\"embeds\": [{\"title\": \"" + fullTitle + "\", \"color\": " + (String) color + ", \"fields\": [{\"name\": \"\",\"value\": \"" + tempStr + humidityStr + "] }],\"tts\":false}");
 
   Serial.println("Send Discord Temperature POST Code: " + (String) code + "   " + https.errorToString(code));
 }
@@ -264,7 +279,7 @@ void sendDiscordConnect(String title){
   String alertRangeStr    = nominalRangeStr + "\\n" + warningRangeStr + "\\n" + errorRangeStr;
 
   https.addHeader("Content-Type", "application/json");
-  int code = https.POST("{\"content\":\"\",\"embeds\": [{\"title\": \"" + fullTitle + "\", \"color\": " + (String) DISCORD_GREEN + ", \"fields\": [{\"name\": \"Messaging Intervals\",\"value\": \"" + msgIntervalsStr + "\\n\\u0000\"}, {\"name\": \"Alert Temperature Ranges\",\"value\": \"" + alertRangeStr + "\\u0000\"} ] }],\"tts\":false}");
+  int code = https.POST("{\"content\":\"\",\"embeds\": [{\"title\": \"" + fullTitle + "\", \"color\": " + (String) DISCORD_GREEN + ", \"fields\": [{\"name\": \"***" + LABEL + "***\",\"value\": \"_" + SENSOR_TYPE + "_\\n\\u0000\"}, {\"name\": \"Messaging Intervals\",\"value\": \"" + msgIntervalsStr + "\\n\\u0000\"}, {\"name\": \"Alert Temperature Ranges\",\"value\": \"" + alertRangeStr + "\\u0000\"} ] }],\"tts\":false}");
 
   Serial.println("Send Discord Temperature POST Code: " + (String) code + "   " + https.errorToString(code));
 }
