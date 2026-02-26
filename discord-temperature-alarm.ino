@@ -43,8 +43,11 @@ Commands:
 
 // #define UTC-5 -5*60*60
 #define WEBHOOK "https://discord.com/api/webhooks/1470647908662640752/HklrpLbKj0ZXje0DRMSiwuuF3VjHbyau5T-UFJStuo0ZQ64c1S5j69XyUZ5ZudgZMLwM"
-#define SSID "Hi (3)"
-#define KEY "12345671"
+// #define SSID "Hi (3)"
+// #define KEY "12345671"
+
+#define SSID "36Albion"
+#define KEY "LigmaChops24"
 
 #define DISCORD_BLUE    32767
 #define DISCORD_GREEN   65280
@@ -251,7 +254,7 @@ void sendDiscordMsg(String subContent, int color){
 }
 
 void sendDiscordTemperature(String title, int color, double temp, double humidity){
-  String fullTitle = "**" + title + "  " + getFormattedTime() + "**\\u0000";
+  String fullTitle = "**" + title + "  " + String(temp * 1.8 + 32, 0) + "°F " + getFormattedTime() + "**\\u0000";
   String tempStr = String(temp * 1.8 + 32) + " °F" + "    |    " + String(temp) + " °C";
   String humidityStr = "\\u0000\"}";
   if(SENSOR_TYPE != "DS18B20") humidityStr = "\\n\\u0000\"}, {\"name\": \"Humidity\",\"value\": \"" + String(humidity) + " %\\u0000\"}";
@@ -301,10 +304,10 @@ String formatDateTime(const struct tm& t)
   char buffer[25];  // Enough for "YYYY-MM-DD HH:MM:SS"
   
   snprintf(buffer, sizeof(buffer),
-           " %02d/%02d/%02d  %02d:%02d:%02d",
+           " %02d/%02d  %02d:%02d:%02d",
            t.tm_mon + 1,
            t.tm_mday,
-           t.tm_year + 1900 - 2000,
+          //  t.tm_year + 1900 - 2000,
            t.tm_hour,
            t.tm_min,
            t.tm_sec);
